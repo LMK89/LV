@@ -216,11 +216,21 @@ def load_lora_model(checkpoint: str, device: str = "cpu", merge: bool = True):
     adapter_cfg = os.path.join(checkpoint, "adapter_config.json")
     if os.path.isfile(adapter_cfg):
         with open(adapter_cfg, "r", encoding="utf-8") as f:
-            base_id = json.load(f).get("base_model_name_or_path")
+            cfg_data = json.load(f)
+            base_id = cfg_data.get("base_model_name_or_path")
+            target_mods = cfg_data.get("target_modules", [])
         base = load_base_model(base_id, dtype=torch.float32)
         model = PeftModel.from_pretrained(base, checkpoint)
         if merge:
-            model = model.merge_and_unload()  # gộp adapter -> inference nhanh, 0 overhead
+            if "lm_head" in target_mods and getattr(base.config, "tie_word_embeddings", False):
+                logger.warning(
+                    "CẢNH BÁO AN TOÀN: Adapter chứa 'lm_head' trong khi model có tie_word_embeddings=True. "
+                    "Từ chối merge_and_unload() để tránh làm biến dạng ma trận embedding đầu vào (gây lỗi U+FFFD). "
+                    "Mô hình sẽ chạy ở chế độ unmerged (merge=False)."
+                )
+                merge = False
+            else:
+                model = model.merge_and_unload()  # gộp adapter -> inference nhanh, 0 overhead
     else:
         # checkpoint đã merge sẵn (không có adapter_config)
         model = _florence2_class().from_pretrained(

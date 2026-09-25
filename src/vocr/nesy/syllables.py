@@ -77,7 +77,11 @@ def normalize_syllable(text: str) -> str:
 def is_valid_syllable(syllable: str, allow_domain_tokens: bool = True) -> bool:
     if not syllable:
         return True
+    if "\ufffd" in syllable:
+        return False
     norm = normalize_syllable(syllable)
+    if "\ufffd" in norm:
+        return False
     # Ký tự số thuần túy, ký tự đặc biệt, dấu câu
     if re.match(r"^[\d\W_]+$", norm, flags=re.UNICODE):
         return True
@@ -118,7 +122,11 @@ def could_start_valid_syllable(text: str, allow_domain_tokens: bool = True) -> b
     """True nếu `text` là âm tiết hợp lệ HOẶC là tiền tố của một âm tiết hợp lệ."""
     if not text:
         return True
+    if "\ufffd" in text:
+        return False
     norm = normalize_syllable(text)
+    if "\ufffd" in norm:
+        return False
     if re.match(r"^[\d\W_]+$", norm, flags=re.UNICODE):
         return True
     if is_valid_syllable(norm, allow_domain_tokens=allow_domain_tokens):

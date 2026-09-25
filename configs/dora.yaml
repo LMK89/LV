@@ -30,4 +30,6 @@ target_modules:
   - "qkv"
   - "proj"
   - "image_projection"
-  - "lm_head"
+  # Đã loại bỏ "lm_head" để tránh lỗi corrupt embedding khi merge_and_unload()
+  # do tie_word_embeddings=True (lm_head dùng chung trọng số với embedding).
+

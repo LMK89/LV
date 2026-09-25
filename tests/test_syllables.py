@@ -33,3 +33,10 @@ def test_prefixes():
     assert could_start_valid_syllable("ngh")
     assert could_start_valid_syllable("nghiê")
     assert not could_start_valid_syllable("nghx")
+
+
+def test_ufffd_invalid():
+    for w in ["\ufffd", "\ufffd\ufffd", "ú\ufffd", "(\ufffd", "chng\ufffd", "l\ufffda"]:
+        assert not is_valid_syllable(w), f"Expected False for {repr(w)}"
+        assert not could_start_valid_syllable(w), f"Expected False prefix for {repr(w)}"
+
