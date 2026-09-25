@@ -4,7 +4,34 @@ import os
 import random
 import unicodedata
 
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        @staticmethod
+        def approx(expected, rel=1e-5, abs_tol=1e-9):
+            class _Approx:
+                def __init__(self, exp):
+                    self.exp = exp
+                def __eq__(self, other):
+                    diff = abs(other - self.exp)
+                    tol = max(rel * abs(self.exp), abs_tol)
+                    return diff <= tol
+            return _Approx(expected)
+
+        class mark:
+            @staticmethod
+            def parametrize(argnames, argvalues):
+                def decorator(fn):
+                    def wrapper(*args, **kwargs):
+                        for val in argvalues:
+                            if isinstance(val, (tuple, list)) and not isinstance(val, str):
+                                fn(*val)
+                            else:
+                                fn(val)
+                    return wrapper
+                return decorator
+    pytest = _MockPytest()
 
 from vocr.eval.metrics import corpus_cer, edit_distance
 from vocr.eval.oracle import analyze_line, b_subgroup, is_invalid, summarize

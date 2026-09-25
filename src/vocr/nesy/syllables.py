@@ -119,12 +119,21 @@ VIET_SYLLABLE_PREFIXES: frozenset[str] = _build_prefix_set(
 
 
 def could_start_valid_syllable(text: str, allow_domain_tokens: bool = True) -> bool:
-    """True nếu `text` là âm tiết hợp lệ HOẶC là tiền tố của một âm tiết hợp lệ."""
+    """True nếu `text` là âm tiết hợp lệ HOẶC là tiền tố của một âm tiết hợp lệ.
+
+    Lưu ý với byte-level BPE: khi một từ bắt đầu bằng ký tự nhiều byte tiếng Việt
+    (vd: ở, ấy, ạ, ứng...), token đầu tiên decode ra một byte lẻ (kết thúc bằng U+FFFD).
+    Vì vậy chuỗi được phép có U+FFFD ở cuối (đang viết dở). Nếu U+FFFD nằm ở giữa
+    thì vẫn từ chối vì đó là byte rác / hỏng cấu trúc.
+    """
     if not text:
         return True
-    if "\ufffd" in text:
+    s = text.rstrip("\ufffd")
+    if "\ufffd" in s:
         return False
-    norm = normalize_syllable(text)
+    if not s:
+        return True
+    norm = normalize_syllable(s)
     if "\ufffd" in norm:
         return False
     if re.match(r"^[\d\W_]+$", norm, flags=re.UNICODE):

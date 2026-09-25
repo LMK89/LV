@@ -36,7 +36,14 @@ def test_prefixes():
 
 
 def test_ufffd_invalid():
+    # is_valid_syllable luôn từ chối mọi chuỗi có U+FFFD (không thể là âm tiết hoàn chỉnh)
     for w in ["\ufffd", "\ufffd\ufffd", "ú\ufffd", "(\ufffd", "chng\ufffd", "l\ufffda"]:
         assert not is_valid_syllable(w), f"Expected False for {repr(w)}"
-        assert not could_start_valid_syllable(w), f"Expected False prefix for {repr(w)}"
+
+    # could_start_valid_syllable cho phép U+FFFD ở cuối (byte dở dang), nhưng từ chối nếu U+FFFD ở giữa hoặc prefix sai
+    assert could_start_valid_syllable("\ufffd")
+    assert could_start_valid_syllable("ú\ufffd")
+    assert not could_start_valid_syllable("l\ufffda")
+    assert not could_start_valid_syllable("chng\ufffd")
+
 

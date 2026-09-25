@@ -55,7 +55,9 @@ class NeSyTrainer(Trainer):
             for tid in range(vocab_size):
                 try:
                     decoded = self.nesy_tokenizer.decode([tid], skip_special_tokens=True).strip()
-                    if decoded and not decoded.isspace() and not is_valid_syllable(decoded):
+                    # Mảnh byte decode ra U+FFFD: không phạt ở cấp token đơn lẻ
+                    # để tránh triệt tiêu xác suất các byte mở đầu tiếng Việt.
+                    if decoded and not decoded.isspace() and "\ufffd" not in decoded and not is_valid_syllable(decoded):
                         invalid_mask_cpu[tid] = 1.0
                         self._invalid_token_ids.add(tid)
                 except Exception:
