@@ -29,14 +29,13 @@
 Chi tiết: `docs/debug_fffd.md`. Tokenizer không có lỗi (round-trip 0/936 hỏng).
 Nghi phạm chính: DoRA gắn vào `lm_head` dùng chung trọng số với embedding decoder,
 rồi `merge_and_unload()` lúc đánh giá làm đổi embedding đầu vào (PEFT đã cảnh báo
-trong log train v1). **Cần chạy `scripts/debug_fffd.py model` trên GPU để xác
-nhận trước bước 3**; `configs/dora.yaml` và `loader.py` của LV vẫn mang lỗi này.
+trong log train v1). Đã sửa ở PR #2 (`configs/dora.yaml` và `src/vocr/models/loader.py`).
+Cần chạy `scripts/debug_fffd.py model` trên GPU (cổng G0) để xác nhận số liệu thực tế trước bước 3.
 
 ## Quy tắc chốt nhánh (chốt chính thức tại bước 2b ngày 25/09/2026, đóng băng trước bước 3)
 
-Ký hiệu: `Δ_oracle` = CER(λ=0) − CER khi sửa đúng toàn bộ lỗi nhóm (a).
-Chỉ số `Δ_oracle` được tính dựa trên phân loại lỗi âm tiết chính ($a_1 + seg\_a_1$) trên tập Val.
-Khoảng tin cậy 95% được tính bằng Clustered Bootstrap theo Document ID (paired bootstrap).
+Ký hiệu: `Δ_oracle` = CER(λ=0) − CER khi sửa đúng toàn bộ lỗi nhóm âm tiết chính ($a_1 + seg\_a_1$) trên tập Val.
+Chỉ số `Δ_oracle` và khoảng tin cậy 95% được tính bằng Clustered Bootstrap theo Document ID (paired bootstrap), tính trung bình qua 3 seed của λ=0.
 
 | Điều kiện | Nhánh |
 |---|---|
@@ -45,7 +44,10 @@ Khoảng tin cậy 95% được tính bằng Clustered Bootstrap theo Document I
 | `Δ_oracle` ≥ **2.0** điểm % CER và FSM lấy được ≥ **70** % của `Δ_oracle` | Đóng góp chính = FSM + phân tích, bỏ DPO |
 | `Δ_oracle` ≥ **2.0** điểm % CER và FSM lấy được < **70** % | Làm DPO trên chuỗi tự sinh (tiêu chí chính CER), bắt buộc đối chứng DPO-chỉ-CER |
 
-Quy tắc đã đạt đồng thuận kỹ thuật giữa Antigravity và Claude Code (Opus 5.5).
+*Quy tắc vùng chưa định nghĩa (H4):* Nếu `Δ_oracle` < 2.0 điểm % CER nhưng cận trên khoảng tin cậy 95% ≥ 2.0, kết luận là **chưa đủ bằng chứng rằng trần thấp**, do đó vẫn tiếp tục theo nhánh `Δ_oracle ≥ 2.0` (đo phần FSM lấy được ở Bước 4) và báo cáo rõ khoảng tin cậy.
 
-Ngày chốt ngưỡng: 25/09/2026 (commit: bước 2b)
+Quy tắc đã đạt đồng thuận kỹ thuật giữa Antigravity và Claude Code.
+
+Ngày chốt ngưỡng: 25/09/2026 (commit: `18488b4`)
+
 
