@@ -11,32 +11,35 @@ Cập nhật lúc: 25/09/2026 (sau Bước 1b)
 | Bước | Nhánh / PR | Trạng thái | Kết quả chính |
 |---|---|---|---|
 | **1a** | `exp/01-chia-du-lieu` (PR #1) | **Đã MERGE vào `main`** | Chia 1350 dòng theo mã bài (Document-level grouping): Train 936 (69.3%) / Val 202 (15.0%) / Test 212 (15.7%). Rò rỉ = 0 bài, 0 tài liệu, 0 câu trùng. |
-| **1b** | `exp/02-debug-fffd` (PR #2) | **Đã MERGE vào `main`** | **Phát hiện bước ngoặt:** Lỗi U+FFFD (26.7%) ở v1 là do DoRA gắn vào `lm_head` (tied với `decoder.embed_tokens`). Khi gọi `merge_and_unload()`, embedding đầu vào của decoder bị méo. Model và NeSy Loss không bị lỗi. |
-| **2** | `exp/03-phan-loai-loi` | **SẮP BẮT ĐẦU** | Phân loại lỗi 3 nhóm, CER Oracle (trần can thiệp cấu trúc), phân mảnh chéo tokenizer. |
+| **1b** | `exp/02-debug-fffd` (PR #2) | **Đã MERGE vào `main`** | **Phát hiện bước ngoặt:** Lỗi U+FFFD (26.7%) ở v1 là do DoRA gắn vào `lm_head` (tied với `decoder.embed_tokens`). Khi gọi `merge_and_unload()`, embedding đầu vào của decoder bị méo. Đã loại bỏ `lm_head` khỏi `configs/dora.yaml`. |
+| **2** | `exp/03-phan-loai-loi` (PR #3) | **Đã MERGE vào `main`** | Xây dựng hoàn chỉnh module `src/vocr/eval/oracle.py`, xử lý lỗi tách/gộp từ, Clustered Bootstrap, bộ kiểm thử 24 test cases pass 100%. Sửa lỗi `could_start_valid_syllable` và NeSy loss mask. |
+| **2b** | `main` | **BƯỚC TIẾP THEO** | **Chốt ngưỡng đăng ký trước (pre-registration)** trong `docs/lo_trinh.md` TRƯỚC khi có số liệu Bước 3. |
+| **3** | `exp/04-quet-lambda` | Sắp tới | Quét $\lambda \in \{0, 0.1, 0.5\} \times \text{mask } \{\text{rule}, \text{random}\} \times 3 \text{ seeds}$ trên GPU. |
 
 ---
 
 ## 2. Quy tắc vận hành & Ràng buộc hệ thống (Bắt buộc tuân thủ)
 
-1. **Môi trường máy Antigravity (Local):**
+1. **Phân công trách nhiệm:**
+   - **Claude Code (Opus):** Kiến trúc sư trưởng / Reviewer / Phản biện / Thiết kế tài liệu học thuật.
+   - **Antigravity:** Developer / Coder thực thi trực tiếp trên local (code, chạy test, commit và merge).
+2. **Nguyên tắc đồng thuận:**
+   - Không bên nào tự ý chốt một chiều; mọi thay đổi lớn đều qua thảo luận kỹ thuật, đạt đồng thuận 2 bên mới tiến hành code và merge.
+3. **Môi trường máy Antigravity (Local):**
    - **KHÔNG CÓ GPU:** Bỏ qua hoàn toàn các bước train nặng hay nạp full weights trên local.
-   - Chỉ chạy các bài kiểm thử nhẹ bằng CPU (unit test `pytest`, kiểm tra cú pháp, dry-run 1-2 mẫu mock).
-2. **Kỷ luật Git & Phối hợp:**
-   - Mọi bước làm việc đều mở nhánh riêng `exp/NN-ten-buoc`.
-   - Claude Code viết tài liệu thiết kế vào `docs/designs/` và script vào `src/` hoặc `scripts/`, sau đó tạo PR.
-   - Antigravity sẽ review, merge vào `main` và kéo về local.
-3. **Quyết định kiến trúc đã chốt:**
+   - Chỉ chạy các bài kiểm thử nhẹ bằng CPU (unit test, kiểm tra cú pháp, dry-run mock).
+4. **Quyết định kỹ thuật đã chốt:**
    - **Bộ chia dữ liệu:** Giữ 1 Fixed Split chuẩn mực 70/15/15 (bác bỏ K-fold).
    - **Đánh giá thống kê:** Dùng Paired Clustered Bootstrap (resample theo Document ID, 33 cụm ở tập test) trong `src/vocr/eval/significance.py`.
    - **Thuật ngữ luận văn:** Công bố là **"Document-independent evaluation"**.
-   - **Sửa lỗi DoRA lm_head:**
-     - Với checkpoint cũ: Đặt `merge=False` khi nạp để đánh giá.
-     - Với cấu hình huấn luyện mới: Bỏ `lm_head` khỏi `target_modules` trong `configs/dora.yaml`.
+   - **DoRA:** Bỏ `lm_head` khỏi `configs/dora.yaml`, thêm safeguard từ chối merge nếu tied-weights.
+   - **Syllables & NeSy:** `could_start_valid_syllable` cho phép `\ufffd` ở cuối chuỗi; NeSy loss mask loại trừ token mảnh byte đơn lẻ.
 
 ---
 
-## 3. Nhiệm vụ tiếp theo: BƯỚC 2 (`exp/03-phan-loai-loi`)
+## 3. Nhiệm vụ tiếp theo: BƯỚC 2b (`main`)
 
-- **Mục tiêu:** Phân tích dữ liệu & dự đoán v1 (hoặc baseline) để tính trần CER Oracle trước khi bước vào huấn luyện Bước 3.
-- **Tài nguyên yêu cầu:** Hoàn toàn chạy trên **CPU** (rất phù hợp cho máy hiện tại).
-- **Đặc tả chi tiết:** Xem tại `specs/step2_oracle_cer.md`.
+- Điền các ngưỡng rẽ nhánh trong bảng quy tắc `docs/lo_trinh.md`:
+  - Ngưỡng trần `Δ_oracle` (gợi ý: 2 điểm % CER).
+  - Ngưỡng hiệu quả FSM (gợi ý: 70% của `Δ_oracle`).
+- Commit chốt ngưỡng trên `main` trước khi tiến hành huấn luyện Bước 3 trên GPU.
