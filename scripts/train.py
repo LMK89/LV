@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--train_config", type=str, default="configs/train.yaml")
     parser.add_argument("--lora_config", type=str, default="configs/dora.yaml")
     parser.add_argument("--nesy_weight", type=float, default=0.1)
-    parser.add_argument("--mask_mode", type=str, default="rule", choices=["rule", "random"])
+    parser.add_argument("--mask_mode", type=str, default="rule", choices=["rule", "random", "none"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--resume", type=str, default=None)
@@ -51,7 +51,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s \u2014 %(message)s",
+        format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
         handlers=[logging.StreamHandler(sys.stdout),
                   logging.FileHandler(os.path.join(args.output_dir, "train.log"), encoding="utf-8")],
     )
@@ -61,15 +61,32 @@ def main():
         train_cfg = yaml.safe_load(f)
     lora_cfg = resolve_lora_config(args.lora_config)
 
-    # Lưu đủ thông tin để tái lập lần chạy
-    with open(os.path.join(args.output_dir, "run_info.json"), "w", encoding="utf-8") as f:
-        json.dump({"args": vars(args), "git_commit": _git_commit(),
-                   "train_config": train_cfg, "lora_config": lora_cfg}, f, ensure_ascii=False, indent=2)
+    # Kiểm tra hỗ trợ bf16 nếu được bật
+    bf16_enabled = train_cfg.get("bf16", False)
+    if bf16_enabled:
+        import torch
+        if torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
+            logger.error("bf16 is set to True but the current GPU does not support bf16. Aborting to ensure fair comparison.")
+            sys.exit(1)
 
     train_cfg["nesy_loss_weight"] = args.nesy_weight
     train_cfg["output_dir"] = args.output_dir
 
     model, processor, _ = load_model_and_processor(lora_cfg, train_cfg)
+
+    # Ghi lại tỉ lệ trainable parameters
+    trainable_params, all_params = model.get_nb_trainable_parameters() if hasattr(model, "get_nb_trainable_parameters") else (0, 0)
+    trainable_info = {
+        "trainable_params": trainable_params,
+        "all_params": all_params,
+        "trainable_percent": 100 * trainable_params / all_params if all_params > 0 else 0.0
+    }
+
+    # Lưu đủ thông tin để tái lập lần chạy
+    with open(os.path.join(args.output_dir, "run_info.json"), "w", encoding="utf-8") as f:
+        json.dump({"args": vars(args), "git_commit": _git_commit(),
+                   "train_config": train_cfg, "lora_config": lora_cfg,
+                   "trainable_info": trainable_info}, f, ensure_ascii=False, indent=2)
 
     logger.info(f"Loading dataset: {train_cfg['dataset_path']}")
     raw_data = load_dataset(
@@ -79,20 +96,25 @@ def main():
             "validation": train_cfg["val_dataset_path"],
         },
     )
+
+    # Subsample nếu có giới hạn số lượng mẫu (phục vụ dry-run)
+    max_train_samples = train_cfg.get("max_train_samples")
+    if max_train_samples and max_train_samples < len(raw_data["train"]):
+        raw_data["train"] = raw_data["train"].select(range(max_train_samples))
+    max_eval_samples = train_cfg.get("max_eval_samples")
+    if max_eval_samples and max_eval_samples < len(raw_data["validation"]):
+        raw_data["validation"] = raw_data["validation"].select(range(max_eval_samples))
+
     logger.info(f"Train: {len(raw_data['train'])} | Val: {len(raw_data['validation'])}")
 
     # Drop records whose image file is missing BEFORE training starts.
-    # The collator's fallback (dummy black image) exists only as a last
-    # resort — silently training "black image -> text" pairs teaches the
-    # model to hallucinate and corrupts results without any visible error.
     for split in ("train", "validation"):
         before = len(raw_data[split])
         raw_data[split] = raw_data[split].filter(lambda r: os.path.isfile(r.get("image", "")))
         dropped = before - len(raw_data[split])
         if dropped:
             logger.warning(
-                f"[{split}] Dropped {dropped}/{before} records with missing image files. "
-                "If this number is large, the dataset images were not uploaded/extracted correctly."
+                f"[{split}] Dropped {dropped}/{before} records with missing image files."
             )
     if len(raw_data["train"]) == 0:
         logger.error("No training records remain after filtering missing images. Aborting.")
@@ -107,8 +129,9 @@ def main():
         per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         learning_rate=train_cfg["learning_rate"],
-        num_train_epochs=train_cfg["num_train_epochs"],
-        lr_scheduler_type=train_cfg["lr_scheduler_type"],
+        num_train_epochs=train_cfg.get("num_train_epochs", 3),
+        max_steps=train_cfg.get("max_steps", -1),
+        lr_scheduler_type=train_cfg.get("lr_scheduler_type", "cosine"),
         warmup_ratio=train_cfg.get("warmup_ratio", 0.05),
         fp16=train_cfg.get("fp16", False),
         bf16=train_cfg.get("bf16", False),
@@ -117,10 +140,10 @@ def main():
         save_strategy=train_cfg["save_strategy"],
         save_steps=train_cfg["save_steps"],
         save_total_limit=train_cfg["save_total_limit"],
-        load_best_model_at_end=train_cfg["load_best_model_at_end"],
-        metric_for_best_model=train_cfg["metric_for_best_model"],
-        greater_is_better=train_cfg["greater_is_better"],
-        logging_steps=train_cfg["logging_steps"],
+        load_best_model_at_end=train_cfg.get("load_best_model_at_end", False),
+        metric_for_best_model=train_cfg.get("metric_for_best_model", "eval_ce"),
+        greater_is_better=train_cfg.get("greater_is_better", False),
+        logging_steps=train_cfg.get("logging_steps", 10),
         report_to=train_cfg.get("report_to", "none"),
         remove_unused_columns=False,
         label_names=["labels"],

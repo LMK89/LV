@@ -17,7 +17,7 @@ save_strategy: "steps"
 save_steps: 200
 save_total_limit: 2
 load_best_model_at_end: true
-metric_for_best_model: "eval_loss"
+metric_for_best_model: "eval_ce"
 greater_is_better: false
 early_stopping_patience: 15
 logging_steps: 10
