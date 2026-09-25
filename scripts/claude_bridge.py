@@ -124,19 +124,48 @@ class ClaudeCDPClient:
     def send_message(self, text: str) -> dict:
         js_insert = f"""
         (() => {{
-            const editor = document.querySelector('div[aria-label="Prompt"]');
+            const editor = document.querySelector('div[aria-label="Prompt"], div[contenteditable="true"], textarea');
             if (!editor) return {{ status: 'ERROR', message: 'Không tìm thấy ô nhập Prompt' }};
             editor.focus();
             document.execCommand('selectAll', false, null);
             document.execCommand('delete', false, null);
             const text = {json.dumps(text)};
             document.execCommand('insertText', false, text);
-            const sendBtn = document.querySelector('button[aria-label="Send"]');
-            if (sendBtn && !sendBtn.disabled) {{
-                sendBtn.click();
-                return {{ status: 'SENT' }};
+            editor.dispatchEvent(new Event('input', {{ bubbles: true, composed: true }}));
+            editor.dispatchEvent(new Event('change', {{ bubbles: true, composed: true }}));
+
+            // Tìm nút send theo nhiều tiêu chí
+            const sendSelectors = [
+                'button[aria-label="Send"]',
+                'button[aria-label="Send Message"]',
+                'button[aria-label="Send Prompt"]',
+                'button[aria-label="Send prompt"]',
+                'button[aria-label="Send message"]'
+            ];
+            let sendBtn = null;
+            for (const sel of sendSelectors) {{
+                const b = document.querySelector(sel);
+                if (b) {{ sendBtn = b; break; }}
             }}
-            return {{ status: 'TYPED_BUT_DISABLED' }};
+            if (!sendBtn) {{
+                // fallback: tìm button chứa SVG mũi tên hoặc có text gửi
+                const allButtons = Array.from(document.querySelectorAll('button'));
+                sendBtn = allButtons.find(b => {{
+                    const label = (b.getAttribute('aria-label') || '').toLowerCase();
+                    return label.includes('send') || (b.innerText || '').toLowerCase().includes('send');
+                }});
+            }}
+
+            if (sendBtn) {{
+                if (!sendBtn.disabled) {{
+                    sendBtn.click();
+                    return {{ status: 'SENT' }};
+                }} else {{
+                    return {{ status: 'TYPED_BUT_DISABLED', sendBtnAria: sendBtn.getAttribute('aria-label') }};
+                }}
+            }}
+
+            return {{ status: 'TYPED_NO_BUTTON' }};
         }})()
         """
         return self.evaluate(js_insert)
@@ -156,7 +185,8 @@ def main():
     subparsers.add_parser("status", help="Kiểm tra trạng thái tab Claude Code")
 
     send_parser = subparsers.add_parser("send", help="Gửi tin nhắn sang Claude Code")
-    send_parser.add_argument("message", type=str, help="Nội dung cần gửi")
+    send_parser.add_argument("message", nargs="?", default="", type=str, help="Nội dung cần gửi")
+    send_parser.add_argument("--file", "-f", type=str, default=None, help="Đọc nội dung từ file text")
 
     args = parser.parse_args()
     if not args.command or args.command == "status":
@@ -170,8 +200,15 @@ def main():
             print(f"[ERROR] {e}")
     elif args.command == "send":
         try:
+            msg = args.message
+            if args.file and os.path.exists(args.file):
+                with open(args.file, "r", encoding="utf-8") as f:
+                    msg = f.read()
+            if not msg.strip():
+                print("[ERROR] Tin nhắn trống, không thể gửi.")
+                sys.exit(1)
             client = ClaudeCDPClient()
-            res = client.send_message(args.message)
+            res = client.send_message(msg)
             print(f"Kết quả gửi: {res}")
             client.close()
         except Exception as e:
