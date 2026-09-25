@@ -130,9 +130,24 @@ def load_processor(path_or_id: Optional[str] = None):
 
 
 def load_base_model(model_id: Optional[str] = None, dtype=torch.float32, device: Optional[str] = None):
-    """Nạp Florence-2 gốc (chưa gắn adapter)."""
-    model = _florence2_class().from_pretrained(
-        resolve_base_model_id(model_id),
+    """Nạp Florence-2 gốc (chưa gắn adapter). Hỗ trợ F-tiny khi DRY_RUN=1."""
+    base_id = resolve_base_model_id(model_id)
+    florence_cls = _florence2_class()
+
+    if os.environ.get("DRY_RUN") == "1":
+        from transformers import AutoConfig
+        logger.info("Initializing F-tiny model (uninitialized weights, 1 encoder/decoder layer) for dry-run...")
+        config = AutoConfig.from_pretrained(base_id)
+        if hasattr(config, "text_config"):
+            config.text_config.encoder_layers = 1
+            config.text_config.decoder_layers = 1
+        model = florence_cls(config).to(dtype=dtype)
+        if device is not None:
+            model = model.to(device)
+        return model
+
+    model = florence_cls.from_pretrained(
+        base_id,
         # eager: bám đúng hành vi cũ của repo và né lỗi _supports_sdpa từng gặp
         # ở vài bản transformers; đổi sang "sdpa" thì phải đo lại tốc độ/CER.
         attn_implementation="eager",
