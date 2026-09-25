@@ -1,7 +1,9 @@
 # Thiết kế Bước 2: Phân loại lỗi, CER Oracle, phân mảnh chéo tokenizer
 
 Nhánh: `exp/03-phan-loai-loi` · Đặc tả gốc: `specs/step2_oracle_cer.md`
-Trạng thái: **BẢN THIẾT KẾ, chờ đồng thuận với Antigravity trước khi viết code.**
+Trạng thái: **Đã đồng thuận mục A1–A6, nhãn phụ b1/b2 và ngưỡng báo động C3.2 (25/09/2026).**
+Đã có code: `src/vocr/eval/oracle.py`, `analysis/classify_errors_oracle.py`, `tests/test_oracle.py`.
+Kết quả dry-run và kiểm chứng ở mục D, cuối tài liệu.
 Tài nguyên: 100 % CPU, không nạp weight model.
 
 Tài liệu này có 3 phần: (A) các điểm cần chốt trước khi code, (B) thiết kế chi
@@ -377,3 +379,95 @@ bước 2):
    Sửa ở nhánh nào? Tôi đề xuất một nhánh nhỏ `exp/03b-sua-kiem-tra` merge trước
    bước 3.
 5. Chốt các ngưỡng báo động ở C3.2.
+
+---
+
+## D. Hiện thực và kết quả dry-run (sau đồng thuận)
+
+### D1. Các điểm đã chốt và cách hiện thực
+
+| Điểm | Hiện thực |
+|---|---|
+| A1: bước 2 chỉ làm công cụ | Số Δ_oracle chính thức vẫn chờ checkpoint λ=0 (bước 3b), đo trên **val** (A6). |
+| A2: Δ chính = a1 | `ORACLE_MAIN = {a1, seg_a1}`. Hai cận trên: `oracle_a` (thêm a2, seg_a2) và `oracle_a_ins` (xóa thêm `c_ins_invalid`). |
+| A3: căn chỉnh | DP Levenshtein trên âm tiết với chi phí nguyên. Chèn/xóa = 1000, thay thế = 1000·khoảng cách ký tự chuẩn hóa. Tách/gộp k:1 và 1:k (k ≤ 3) có chi phí `1 + 1000·d`, chỉ cho phép khi `d ≤ 1/3`, với `d` là khoảng cách giữa chuỗi nối lại và phía bên kia. Khi hòa điểm, ưu tiên thay thế, rồi tách/gộp, rồi xóa, rồi chèn. |
+| Chốt chặn | Mỗi mức oracle lấy `min(edit mức trước, edit sau khi sửa)`. Các mức lồng nhau nên luôn có `oracle_a_ins ≤ oracle_a ≤ oracle ≤ raw`. Số dòng mà chốt chặn phải can thiệp được báo cáo riêng (`lines_worse_*`). |
+| A4: U+FFFD | `is_invalid()` tự kiểm U+FFFD, ngoài việc gọi `is_valid_syllable` (đã được vá ở 283511a). |
+| A5 | Cờ `--no-domain-tokens`, mặc định bật (giống FSM/NeSy). |
+| Nhãn phụ nhóm b (đồng thuận mới) | **b1 = sai dấu**: bằng nhau sau khi bỏ dấu thanh và mũ/móc/trăng, với `đ` coi như `d` có dấu. Có tách riêng `detail=tone` (chỉ khác 5 dấu thanh) và `detail=diacritic`. **b2 = sai chữ cái.** Hai nhãn thống kê riêng là `b_case` (chỉ khác hoa/thường) và `b_punct` (chỉ khác dấu câu dính kèm). Nhóm a1 cũng mang `detail` để biết âm tiết không hợp lệ do sai dấu hay do rác/U+FFFD (`other`). |
+| Bootstrap | Chọn lại **tài liệu** có hoàn lại, tính lại Δ trên CER cấp corpus, lấy khoảng phân vị 95 % (mặc định 10.000 lần). Mã tài liệu lấy từ `--split_jsonl`; nếu không có thì dùng `significance.extract_cluster_id`. |
+| Phân mảnh | Đọc offline `data/tokenizers/tokenizer.json` bằng gói `tokenizers`, không cần torch. Báo cáo tỉ lệ sai và tỉ lệ nhóm a theo số token BPE của âm tiết nhãn (1, 2, 3, 4+). |
+
+Logic nằm ở `src/vocr/eval/oracle.py` để test import được và để bước 3b dùng
+lại. File `analysis/classify_errors_oracle.py` chỉ đọc/ghi và in báo cáo. Đầu
+ra gồm `summary.json`, `report.md` và `lines.jsonl` (các cặp lỗi của từng dòng
+cùng chuỗi sau khi sửa bằng oracle).
+
+### D2. Kết quả dry-run (10 dòng mock, 3 tài liệu)
+
+`python analysis/classify_errors_oracle.py --dry-run`. Đây là mock nên số liệu
+**chỉ để kiểm tra công cụ**, không phải kết quả thí nghiệm.
+
+| Mức | CER | Δ (điểm %) | Dòng mà sửa làm tệ hơn |
+|---|---|---|---|
+| raw | 10,00 | — | — |
+| oracle (a1 + seg_a1) | 7,00 | 3,00 | 0 |
+| oracle_a | 6,50 | 3,50 | 0 |
+| oracle_a_ins | 4,00 | 6,00 | 0 |
+
+Mỗi dòng mock rơi đúng vào nhóm đã định: `ngươì` → a1, `hóa` → b1,
+`chúngta` → seg_a1, `Obamn` → a2, `chng�`/`l�a` → a1 (other), `xyzq` →
+c_ins_invalid, `học` bị mất → c_del, `bát` → b2, `Năm/năm` → b_case,
+`tuổi,/tuổi` → b_punct. Tổng edit phân rã theo nhóm (20) khớp với edit thật (20).
+
+### D3. Kiểm chứng trên nhiễu tổng hợp (202 câu val × 5 seed = 1.010 dòng)
+
+Dùng bộ sinh nhiễu của `tests/test_oracle.py`: đổi dấu, xóa hoặc chèn ký tự,
+gộp hoặc tách từ, chèn U+FFFD.
+
+- Thời gian chạy khoảng 13 giây cho 1.010 dòng (thuần Python, CPU).
+- Chốt chặn phải can thiệp ở **2/1.010 dòng**. Cả hai là kiểu gộp từ "gần
+  đúng" vượt ngưỡng `d ≤ 1/3`. Ví dụ `dịp viếng` → `dịpqviế gơ`: căn thành
+  `dịp→dịpqviế` (a1) và `viếng→gơ` (b), nên sửa a1 riêng lẻ làm lộ ra phần
+  thiếu. Chốt chặn giữ nguyên các dòng này, nên Δ không bị thổi phồng. Khi chạy
+  trên dự đoán thật, nếu `lines_worse_oracle` lớn hơn khoảng 1 % số dòng thì
+  cần đọc lại `lines.jsonl`.
+- Δ trên nhiễu tổng hợp không mang ý nghĩa khoa học, vì tỉ lệ các loại lỗi do
+  bộ sinh nhiễu quyết định.
+
+### D4. Số liệu thật không phụ thuộc dự đoán (nhãn val/test + tokenizer Florence-2)
+
+| | val | test |
+|---|---|---|
+| Số âm tiết nhãn | 3.167 | 3.321 |
+| Âm tiết nhãn ngoài từ điển, `allow_domain_tokens` bật / tắt | **1,11 % / 1,14 %** | **0,96 % / 1,11 %** |
+| Ví dụ ngoài từ điển | NVƠNN, VN, Kanni, H., m2 | Cienco, UBND, TP, TP.HCM, nilông, ôtô |
+| Token BPE trung bình / âm tiết (mọi âm tiết có chữ hoặc số) | 4,01 | 3,89 |
+| … âm tiết có ký tự ngoài ASCII / âm tiết chỉ ASCII | 4,35 / 1,62 | 4,28 / 1,69 |
+| Tỉ lệ âm tiết có ký tự ngoài ASCII | 87,5 % | 85,1 % |
+| Phân bố 1 / 2 / 3 / 4+ token | 5,5 / 13,1 / 22,6 / 58,8 % | 5,7 / 14,5 / 23,3 / 56,5 % |
+
+Cách đọc:
+
+- **Rủi ro ngược của FSM chặt là khoảng 1 % âm tiết.** Đây là cỡ phần văn bản
+  sẽ bị phá nếu FSM không có lối thoát tên riêng. Con số cùng bậc với ngưỡng
+  trần 2 điểm % gợi ý trong `lo_trinh.md`, nên bước 4 **bắt buộc** phải có lối
+  thoát. Nhiều trường hợp nằm ngoài từ điển là viết tắt (UBND, TP, VN) hoặc
+  chính tả cũ (ôtô, nilông), không phải tên riêng.
+- `allow_domain_tokens` gần như không ảnh hưởng trên bộ dữ liệu báo chí này
+  (chênh ≤ 0,15 điểm %).
+- Phân mảnh theo tần suất trên văn bản thật **nặng hơn** mức theo từ điển: hơn
+  một nửa số âm tiết bị cắt thành 4 token trở lên. Đây là số của riêng Florence-2.
+  Phần so chéo tokenizer (B5) còn chờ file tokenizer của Qwen2-VL, mBART/XLM-R
+  và PhoBERT (xem D5).
+
+### D5. Việc còn lại
+
+1. Bước 3b: chạy `classify_errors_oracle.py --pred_jsonl <λ=0 trên val> --split_jsonl data/splits/val.jsonl`
+   để lấy Δ_oracle chính thức, rồi áp quy tắc rẽ nhánh đã chốt ở bước 2b.
+2. So chéo tokenizer (B5): cần commit thêm `tokenizer.json` của các tokenizer
+   đối chứng vào `data/tokenizers/<tên>/`, rồi mở rộng
+   `analysis/verify_bpe_fragmentation.py` cho mức tần suất.
+3. Kiểm tra độ chính xác của mảnh byte so với ASCII trong lượt λ=0 đầu tiên,
+   theo ngưỡng báo động đã chốt ở C3.2: val có U+FFFD > 1 % số dòng, hoặc mảnh
+   byte kém ASCII > 15 điểm %.
