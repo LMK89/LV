@@ -173,6 +173,9 @@ def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: st
     out_root.mkdir(parents=True, exist_ok=True)
     manifest_path = out_root / "manifest.csv"
 
+    if dry_run:
+        os.environ["DRY_RUN"] = "1"
+
     train_config = "configs/train_dryrun.yaml" if dry_run else sweep_cfg.get("train_config", "configs/train.yaml")
     lora_config = sweep_cfg.get("lora_config", "configs/dora.yaml")
 
