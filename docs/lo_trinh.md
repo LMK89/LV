@@ -4,7 +4,7 @@
 
 | Bước | Nhánh | Việc | Tài nguyên |
 |---|---|---|---|
-| 1a | `exp/01-chia-du-lieu` | Chia lại train/val/test theo tài liệu (hết rò rỉ) | CPU |
+| 1a | `exp/01-chia-du-lieu` | Chia lại train/val/test theo **mã bài** (hết rò rỉ) — `data/splits/split_report.md` | CPU |
 | 1b | `exp/02-debug-fffd` | Tìm nguyên nhân output chứa U+FFFD ở v1: decode trên ảnh train, round-trip tokenizer, BOS/decoder start | CPU/GPU nhỏ |
 | 2 | `exp/03-phan-loai-loi` | Phân loại lỗi (a) âm tiết không hợp lệ / (b) hợp lệ nhưng sai / (c) chèn-xóa; CER oracle; phân mảnh chéo tokenizer | CPU |
 | 2b | `main` | **Chốt ngưỡng bên dưới và commit TRƯỚC bước 3** | — |
@@ -13,6 +13,16 @@
 | 4 | `exp/05-fsm` | FSM chính xác cấp byte (không cho qua U+FFFD vô điều kiện, có lối thoát tên riêng) | GPU (suy luận) |
 | 5 | — | Gặp GVHD với số liệu, chốt nhánh theo quy tắc | — |
 | 6 | `exp/06-dpo` | Chỉ khi quy tắc cho phép | GPU |
+
+## Ghi chú bước 1a
+
+- Cùng một bài báo được nhiều tài liệu chép lại (48 câu trùng nguyên văn giữa các
+  tài liệu, luôn cùng mã bài) → chia theo tài liệu vẫn rò rỉ văn bản; phải chia
+  theo mã bài.
+- Kết quả: train 936 / val 202 / test 212 dòng; test chỉ có 7 bài, 33 tài liệu.
+  Tập nhỏ → hiệu ứng nhỏ (~1–2 điểm CER) khó đạt ý nghĩa thống kê. Nên tìm bản
+  đầy đủ của bộ dữ liệu gốc để mở rộng test, hoặc báo cáo hiệu ứng nhỏ nhất phát
+  hiện được (MDE) từ phương sai bootstrap.
 
 ## Quy tắc chốt nhánh (điền ngưỡng ở bước 2b, không sửa sau khi có số liệu bước 3)
 
