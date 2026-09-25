@@ -1,0 +1,90 @@
+{
+  "total_lines": 10,
+  "total_ref_chars": 250,
+  "cer_raw": 0.072,
+  "cer_oracle": 0.052,
+  "delta_oracle": 0.019999999999999997,
+  "delta_oracle_pct_points": 1.9999999999999998,
+  "total_errors": 10,
+  "group_counts": {
+    "match": 51,
+    "a1": 5,
+    "b1": 1,
+    "b2": 1,
+    "a2": 1,
+    "c_del": 1,
+    "c_ins": 1
+  },
+  "group_ratios": {
+    "a1": 0.5,
+    "b1": 0.1,
+    "b2": 0.1,
+    "a2": 0.1,
+    "c_del": 0.1,
+    "c_ins": 0.1
+  },
+  "examples": {
+    "a1": [
+      {
+        "ref": "chúng",
+        "hyp": "ch�ng",
+        "img": "mock_02.png"
+      },
+      {
+        "ref": "cùng",
+        "hyp": "c�ng",
+        "img": "mock_02.png"
+      },
+      {
+        "ref": "ngao",
+        "hyp": "ng�o",
+        "img": "mock_09.png"
+      },
+      {
+        "ref": "sò",
+        "hyp": "s�",
+        "img": "mock_09.png"
+      },
+      {
+        "ref": "nhịp",
+        "hyp": "nhjp",
+        "img": "mock_10.png"
+      }
+    ],
+    "b1": [
+      {
+        "ref": "hoa",
+        "hyp": "hoá",
+        "img": "mock_03.png"
+      }
+    ],
+    "b2": [
+      {
+        "ref": "nhân",
+        "hyp": "nông",
+        "img": "mock_04.png"
+      }
+    ],
+    "a2": [
+      {
+        "ref": "Cienco",
+        "hyp": "Ciencô",
+        "img": "mock_05.png"
+      }
+    ],
+    "c_del": [
+      {
+        "ref": "một",
+        "hyp": null,
+        "img": "mock_06.png"
+      }
+    ],
+    "c_ins": [
+      {
+        "ref": null,
+        "hyp": "thì",
+        "img": "mock_07.png"
+      }
+    ]
+  }
+}
