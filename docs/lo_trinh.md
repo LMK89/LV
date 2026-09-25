@@ -24,6 +24,14 @@
   đầy đủ của bộ dữ liệu gốc để mở rộng test, hoặc báo cáo hiệu ứng nhỏ nhất phát
   hiện được (MDE) từ phương sai bootstrap.
 
+## Ghi chú bước 1b
+
+Chi tiết: `docs/debug_fffd.md`. Tokenizer không có lỗi (round-trip 0/936 hỏng).
+Nghi phạm chính: DoRA gắn vào `lm_head` dùng chung trọng số với embedding decoder,
+rồi `merge_and_unload()` lúc đánh giá làm đổi embedding đầu vào (PEFT đã cảnh báo
+trong log train v1). **Cần chạy `scripts/debug_fffd.py model` trên GPU để xác
+nhận trước bước 3**; `configs/dora.yaml` và `loader.py` của LV vẫn mang lỗi này.
+
 ## Quy tắc chốt nhánh (điền ngưỡng ở bước 2b, không sửa sau khi có số liệu bước 3)
 
 Ký hiệu: `Δ_oracle` = CER(λ=0) − CER khi sửa đúng toàn bộ lỗi nhóm (a).
