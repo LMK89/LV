@@ -31,7 +31,19 @@ def get_sig_level(p: float) -> str:
     else:
         return "ns (Not Statistically Sig, p >= 0.05)"
 
-def paired_bootstrap_test(file_a: str, file_b: str, n_samples: int = 1000, seed: int = 42):
+def extract_cluster_id(image_path: str, cluster_by: str = "document") -> str:
+    """Extract cluster ID (document or article) from image filename."""
+    stem = os.path.splitext(os.path.basename(image_path))[0]
+    head, _, _ = stem.partition("_tg_")
+    if cluster_by == "document":
+        return head
+    elif cluster_by == "article":
+        parts = head.split("_")
+        return parts[2] if len(parts) >= 3 else head
+    return stem
+
+
+def paired_bootstrap_test(file_a: str, file_b: str, n_samples: int = 1000, seed: int = 42, cluster_by: str = "document"):
     random.seed(seed)
     np.random.seed(seed)
 
@@ -64,6 +76,21 @@ def paired_bootstrap_test(file_a: str, file_b: str, n_samples: int = 1000, seed:
     wer_diff_obs = mean_wer_a - mean_wer_b
     print(f"Observed Improvement (A - B):     CER = {cer_diff_obs*100:.3f}%, WER = {wer_diff_obs*100:.3f}%")
 
+    # Clustered bootstrap setup
+    use_clustering = cluster_by in ("document", "article")
+    if use_clustering:
+        clusters = [extract_cluster_id(k, cluster_by) for k in common_keys]
+        unique_clusters = np.array(sorted(list(set(clusters))))
+        n_clusters = len(unique_clusters)
+        cluster_to_indices = {c: [] for c in unique_clusters}
+        for idx, c in enumerate(clusters):
+            cluster_to_indices[c].append(idx)
+        for c in cluster_to_indices:
+            cluster_to_indices[c] = np.array(cluster_to_indices[c], dtype=int)
+        print(f"Clustered bootstrap: grouped {n} lines into {n_clusters} clusters (by {cluster_by}).")
+    else:
+        print(f"Standard bootstrap: resampling across {n} lines independently.")
+
     # Bootstrap lists
     boot_cer_a, boot_cer_b = [], []
     boot_wer_a, boot_wer_b = [], []
@@ -71,7 +98,11 @@ def paired_bootstrap_test(file_a: str, file_b: str, n_samples: int = 1000, seed:
 
     print(f"Running paired bootstrap resampling ({n_samples} iterations)...")
     for _ in range(n_samples):
-        indices = np.random.choice(n, size=n, replace=True)
+        if use_clustering:
+            sampled_clusters = np.random.choice(unique_clusters, size=n_clusters, replace=True)
+            indices = np.concatenate([cluster_to_indices[c] for c in sampled_clusters])
+        else:
+            indices = np.random.choice(n, size=n, replace=True)
         
         # Mean CER/WER for iteration
         sub_cer_a = np.mean(cer_a_all[indices])
@@ -104,7 +135,6 @@ def paired_bootstrap_test(file_a: str, file_b: str, n_samples: int = 1000, seed:
     ci_wer_diff = (np.percentile(boot_wer_diff, 2.5), np.percentile(boot_wer_diff, 97.5))
 
     # Calculate p-value (one-sided hypothesis: B is better than A, so difference A - B > 0)
-    # P-value is the fraction of times the bootstrap difference is <= 0 (no improvement or worsen)
     p_cer = np.sum(boot_cer_diff <= 0) / n_samples
     p_wer = np.sum(boot_wer_diff <= 0) / n_samples
 
@@ -119,6 +149,7 @@ This report compares two evaluation runs using non-parametric paired bootstrap r
 - **Model A (Reference)**: {os.path.basename(file_a)}
 - **Model B (Comparison)**: {os.path.basename(file_b)}
 - **Sample size ($N$)**: {n} paired predictions
+- **Resampling mode**: {"Clustered by " + cluster_by + f" ({n_clusters} clusters)" if use_clustering else "Independent line-by-line"}
 - **Bootstrap iterations ($B$)**: {n_samples}
 - **Random seed**: {seed}
 
@@ -153,11 +184,12 @@ def main():
     parser.add_argument("--file_b", type=str, required=True, help="Path to Model B (Proposed/Improved) detailed results .jsonl")
     parser.add_argument("--n_samples", type=int, default=1000, help="Number of bootstrap iterations")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--cluster_by", type=str, default="document", choices=["document", "article", "line"], help="Cluster resampling unit: document (33 clusters), article (7 clusters), or line (independent)")
     parser.add_argument("--output_path", type=str, default=None, help="Save report to this path")
     args = parser.parse_args()
 
     try:
-        report = paired_bootstrap_test(args.file_a, args.file_b, args.n_samples, args.seed)
+        report = paired_bootstrap_test(args.file_a, args.file_b, args.n_samples, args.seed, cluster_by=args.cluster_by)
         if report:
             print("=" * 60)
             print("SIGNIFICANCE TEST RESULTS")
