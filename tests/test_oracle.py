@@ -1,124 +1,201 @@
-"""Unit tests cho module phân loại lỗi và CER Oracle (analysis/classify_errors_oracle.py)."""
+"""Test phân loại lỗi và CER Oracle (docs/designs/step2_error_analysis.md, mục B6)."""
+import json
 import os
-import sys
+import random
+import unicodedata
 
-# Đảm bảo nạp được vocr và analysis
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import pytest
 
-from analysis.classify_errors_oracle import (
-    char_edit_distance,
-    strip_tone_marks,
-    is_invalid_token,
-    tokenize_with_spans,
-    align_syllables_weighted,
-    classify_aligned_pair,
-    apply_oracle_correction,
-    analyze_predictions,
-    MOCK_DRYRUN_DATA,
-)
+from vocr.eval.metrics import corpus_cer, edit_distance
+from vocr.eval.oracle import analyze_line, b_subgroup, is_invalid, summarize
+
+ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 
-def test_char_edit_distance():
-    assert char_edit_distance("hoa", "hoa") == 0
-    assert char_edit_distance("hoa", "hoá") == 1
-    assert char_edit_distance("Việt", "Viêt") == 1
-    assert char_edit_distance("abc", "") == 3
+def groups(line):
+    return [p.group for p in line.pairs if p.group != "ok"]
 
 
-def test_strip_tone_marks():
-    assert strip_tone_marks("hoá") == "hoa"
-    assert strip_tone_marks("hòa") == "hoa"
-    assert strip_tone_marks("hỏa") == "hoa"
-    assert strip_tone_marks("người") == "ngươi"
-    assert strip_tone_marks("tiến") == "tiên"
+def only_error(line):
+    errs = [p for p in line.pairs if p.group != "ok"]
+    assert len(errs) == 1, [(p.op, p.ref_text, p.hyp_text, p.group) for p in errs]
+    return errs[0]
 
 
-def test_is_invalid_token():
-    assert is_invalid_token("\ufffd") is True
-    assert is_invalid_token("ch\ufffdng") is True
-    assert is_invalid_token("xyzq") is True
-    assert is_invalid_token("người") is False
-    assert is_invalid_token("Việt") is False
-    assert is_invalid_token("150.000đ") is False
+# 1
+def test_identical_line_has_no_error():
+    r = analyze_line("Việt Nam là một đất nước", "Việt Nam là một đất nước")
+    assert groups(r) == [] and r.edits_raw == 0
+    assert all(v == 0 for v in r.edits.values())
 
 
-def test_tokenize_with_spans():
-    text = "Việt Nam ơi"
-    spans = tokenize_with_spans(text)
-    assert len(spans) == 3
-    assert spans[0] == ("Việt", 0, 4)
-    assert spans[1] == ("Nam", 5, 8)
-    assert spans[2] == ("ơi", 9, 11)
+# 2
+@pytest.mark.parametrize("hyp", ["hóa", "hoá"])
+def test_valid_wrong_tone_is_b1(hyp):
+    p = only_error(analyze_line("hoa nở", f"{hyp} nở"))
+    assert p.group == "b" and b_subgroup(p) == "b1"
 
 
-def test_align_syllables_weighted():
-    ref_tokens = tokenize_with_spans("chúng ta cùng đi")
-    hyp_tokens = tokenize_with_spans("chúng ta củng đi")
-    aligned = align_syllables_weighted(ref_tokens, hyp_tokens)
-
-    assert len(aligned) == 4
-    assert aligned[0]["op"] == "match"
-    assert aligned[1]["op"] == "match"
-    assert aligned[2]["op"] == "sub"
-    assert aligned[2]["ref_tok"] == "cùng"
-    assert aligned[2]["hyp_tok"] == "củng"
-    assert aligned[3]["op"] == "match"
+def test_wrong_letter_is_b2():
+    p = only_error(analyze_line("cây bút", "cây bát"))
+    assert p.group == "b" and b_subgroup(p) == "b2"
 
 
-def test_classify_aligned_pair():
-    # Nhóm a1: Dự đoán vỡ mã / sai từ điển, nhãn hợp lệ
-    assert classify_aligned_pair("sub", "chúng", "ch\ufffdng") == "a1"
-    assert classify_aligned_pair("sub", "người", "ngưqx") == "a1"
-
-    # Nhóm a2: Cả nhãn lẫn dự đoán đều ngoài từ điển (tên riêng)
-    assert classify_aligned_pair("sub", "Cienco", "Ciencô") == "a2"
-
-    # Nhóm b1: Cả hai hợp lệ, chỉ khác dấu thanh
-    assert classify_aligned_pair("sub", "hoa", "hoá") == "b1"
-    assert classify_aligned_pair("sub", "cùng", "củng") == "b1"
-
-    # Nhóm b2: Cả hai hợp lệ nhưng khác chữ cái
-    assert classify_aligned_pair("sub", "công", "nông") == "b2"
-
-    # Nhóm c: Chèn / Xóa
-    assert classify_aligned_pair("del", "một", None) == "c_del"
-    assert classify_aligned_pair("ins", None, "thì") == "c_ins"
+def test_d_stroke_counts_as_diacritic():
+    p = only_error(analyze_line("đi học", "di học"))
+    assert p.group == "b" and b_subgroup(p) == "b1"
 
 
-def test_oracle_safety_min():
-    """Kiểm tra cơ chế min guard: Oracle correction không bao giờ làm tăng edit distance."""
-    # Giả sử trường hợp lỗi gộp từ
-    ref = "chúng ta ăn cơm"
-    hyp = "chúngta ăn cơm"
-    tokens_r = tokenize_with_spans(ref)
-    tokens_h = tokenize_with_spans(hyp)
-    aligned = align_syllables_weighted(tokens_r, tokens_h)
-    for a in aligned:
-        a["group"] = classify_aligned_pair(a["op"], a["ref_tok"], a["hyp_tok"])
-
-    _, raw_edit, _, final_edit = apply_oracle_correction(hyp, ref, aligned)
-    assert final_edit <= raw_edit
+def test_case_and_punct_subgroups():
+    r = analyze_line("Năm nay tuổi,", "năm nay tuổi")
+    assert sorted(b_subgroup(p) for p in r.pairs if p.group == "b") == ["b_case", "b_punct"]
 
 
-def test_analyze_predictions_mock():
-    res = analyze_predictions(MOCK_DRYRUN_DATA)
-    summary = res["summary"]
-    assert summary["total_lines"] == 10
-    assert summary["cer_raw"] >= summary["cer_oracle"]
-    assert summary["delta_oracle"] >= 0.0
-    assert summary["group_counts"]["a1"] > 0
-    assert summary["group_counts"]["b1"] > 0
-    assert summary["group_counts"]["b2"] > 0
+# 3
+def test_invalid_syllable_is_a1_and_oracle_fixes_it():
+    r = analyze_line("người dân", "ngươì dân")
+    assert only_error(r).group == "a1"
+    assert r.edits_raw > 0 and r.edits["oracle"] == 0
+    assert r.corrected["oracle"] == "người dân"
 
 
-if __name__ == "__main__":
-    test_char_edit_distance()
-    test_strip_tone_marks()
-    test_is_invalid_token()
-    test_tokenize_with_spans()
-    test_align_syllables_weighted()
-    test_classify_aligned_pair()
-    test_oracle_safety_min()
-    test_analyze_predictions_mock()
-    print("ALL ORACLE TESTS PASSED (8/8)!")
+# 4
+def test_oov_reference_is_a2_not_in_main_oracle():
+    r = analyze_line("ông Obama đến", "ông Obamn đến")
+    assert only_error(r).group == "a2"
+    assert r.edits["oracle"] == r.edits_raw == 1
+    assert r.edits["oracle_a"] == 0
+
+
+# 5
+@pytest.mark.parametrize("tok", ["�", "��", "ú�", "(�", "chng�"])
+def test_fffd_always_invalid(tok):
+    assert is_invalid(tok)
+
+
+def test_fffd_substitution_is_a1():
+    r = analyze_line("chúng lừa", "chng� l�a")
+    assert groups(r) == ["a1", "a1"] and r.edits["oracle"] == 0
+
+
+# 6
+def test_merge_is_segmentation_and_oracle_reaches_zero():
+    ref, hyp = "chúng ta ăn", "chúngta ăn"
+    r = analyze_line(ref, hyp)
+    p = only_error(r)
+    assert p.op == "seg" and p.group == "seg_a1"
+    assert r.edits_raw == 1 and r.edits["oracle"] == 0
+    # oracle ngây thơ (thay chúngta -> chúng, để lộ phép xóa "ta") làm CER TĂNG
+    assert edit_distance(ref, "chúng ăn") == 3 > r.edits_raw
+
+
+def test_split_is_segmentation():
+    r = analyze_line("người dân", "ng ười dân")
+    p = only_error(r)
+    assert p.op == "seg" and p.group == "seg_a1" and r.edits["oracle"] == 0
+
+
+# 7
+def test_deletion_and_insertions():
+    r = analyze_line("tôi đi học về", "tôi đi về")
+    assert only_error(r).group == "c_del"
+    r = analyze_line("trời đẹp", "trời đẹp xyzq")
+    assert only_error(r).group == "c_ins_invalid"
+    assert r.edits["oracle_a"] == r.edits_raw and r.edits["oracle_a_ins"] == 0
+    assert r.corrected["oracle_a_ins"] == "trời đẹp"
+    r = analyze_line("trời đẹp", "trời rất đẹp")
+    assert only_error(r).group == "c_ins_valid"
+
+
+# 8
+def _corrupt(text, rng):
+    """Nhiễu ngẫu nhiên kiểu OCR: đổi dấu, xóa/chèn ký tự, gộp/tách từ, U+FFFD."""
+    chars = list(text)
+    for _ in range(rng.randint(1, 6)):
+        if not chars:
+            break
+        i = rng.randrange(len(chars))
+        op = rng.random()
+        if op < 0.3:
+            base = unicodedata.normalize("NFD", chars[i])[0]
+            chars[i] = unicodedata.normalize("NFC", base + rng.choice(["́", "̀", "̣", ""]))
+        elif op < 0.45:
+            del chars[i]
+        elif op < 0.6:
+            chars.insert(i, rng.choice("aăâeêoôơuưy �"))
+        elif op < 0.75 and chars[i] == " ":
+            del chars[i]
+        else:
+            chars[i] = rng.choice(["�", "x", "q", " "])
+    return "".join(chars)
+
+
+def _val_refs(n):
+    with open(os.path.join(ROOT, "data", "splits", "val.jsonl"), encoding="utf-8") as f:
+        return [json.loads(l)["suffix"] for l in f if l.strip()][:n]
+
+
+def test_oracle_never_increases_cer_and_levels_are_nested():
+    rng = random.Random(0)
+    lines = []
+    for ref in _val_refs(120):
+        hyp = _corrupt(ref, rng)
+        r = analyze_line(ref, hyp)
+        assert r.edits["oracle_a_ins"] <= r.edits["oracle_a"] <= r.edits["oracle"] <= r.edits_raw
+        lines.append(r)
+    s = summarize(lines, n_boot=0)
+    assert s["cer_raw"] == pytest.approx(corpus_cer([l.ref for l in lines], [l.hyp for l in lines]))
+    assert 0 <= s["delta_oracle"] <= s["delta_oracle_a"] <= s["delta_oracle_a_ins"]
+    # phân rã theo nhóm là cận trên của edit thật
+    assert s["char_edits_decomposed_total"] >= s["char_edits_true_total"]
+
+
+# 9
+def test_correction_keeps_untouched_whitespace():
+    r = analyze_line("người  dân  ở đây", "ngươì  dân  ở đây")
+    assert r.corrected["oracle"] == "người  dân  ở đây"
+
+
+# 10
+def test_nfc_nfd_match():
+    ref = "người Việt"
+    r = analyze_line(ref, unicodedata.normalize("NFD", ref))
+    assert groups(r) == [] and r.edits_raw == 0
+
+
+# 11
+def _docs_lines(n_docs=5, per_doc=3):
+    out = []
+    for d in range(n_docs):
+        for _ in range(per_doc):
+            out.append(analyze_line("người dân", "ngươì dân", document=f"doc{d}"))
+    return out
+
+
+def test_bootstrap_degenerate_when_documents_identical():
+    s = summarize(_docs_lines(), n_boot=500, seed=1)
+    lo, hi = s["delta_oracle_ci95"]
+    assert lo == pytest.approx(s["delta_oracle"]) and hi == pytest.approx(s["delta_oracle"])
+    assert s["bootstrap_clusters"] == 5
+
+
+def test_bootstrap_is_reproducible():
+    lines = _docs_lines()
+    lines += [analyze_line("hoa nở", "hóa nở", document="doc9")]
+    a = summarize(lines, n_boot=300, seed=7)["delta_oracle_ci95"]
+    b = summarize(lines, n_boot=300, seed=7)["delta_oracle_ci95"]
+    assert a == b
+
+
+def test_domain_token_flag():
+    # "vnd" hợp lệ khi bật allow_domain_tokens -> sai thành "vnđ" là b; tắt -> a1 không áp dụng
+    # vì cả hai phía đều ngoài từ điển -> a2
+    on = only_error(analyze_line("giá 5 usd", "giá 5 vnd"))
+    off = only_error(analyze_line("giá 5 usd", "giá 5 vnd", allow_domain_tokens=False))
+    assert on.group == "b" and off.group == "a2"
+
+
+def test_fragmentation_buckets():
+    lines = [analyze_line("người dân", "ngươì dân")]
+    frag = summarize(lines, n_boot=0, frag_fn=lambda s: len(s.encode("utf-8")))["fragmentation"]
+    assert frag["4+"]["n"] == 2 and frag["4+"]["a_rate"] == 0.5
