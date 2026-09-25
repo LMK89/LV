@@ -45,6 +45,30 @@ def compute_invalid_token_ids(tokenizer) -> set[int]:
     return invalid_ids
 
 
+def compute_byte_and_ascii_token_ids(tokenizer) -> tuple[set[int], set[int]]:
+    """
+    Phân loại token thành:
+    - byte_ids: token là mảnh byte UTF-8 dở dang (decode ra chuỗi chứa U+FFFD, 352 token).
+    - ascii_ids: token decode ra chuỗi hoàn toàn là ký tự ASCII (ord < 128).
+    Dùng để đo byte_acc vs ascii_acc khi đánh giá (cổng kiểm soát G2).
+    """
+    byte_ids = set()
+    ascii_ids = set()
+    vocab_size = len(tokenizer)
+    for tid in range(vocab_size):
+        try:
+            dec = tokenizer.decode([tid], skip_special_tokens=True)
+            if not dec:
+                continue
+            if "\ufffd" in dec:
+                byte_ids.add(tid)
+            elif all(ord(c) < 128 for c in dec):
+                ascii_ids.add(tid)
+        except Exception:
+            pass
+    return byte_ids, ascii_ids
+
+
 def build_invalid_mask(tokenizer, mask_mode: str = "rule", mask_seed: int = 0) -> tuple[torch.Tensor, set[int], set[int]]:
     """
     Tạo tensor mask float32 [vocab_size], set token ID bị phạt, và set rule_invalid_ids.
@@ -86,6 +110,7 @@ class NeSyTrainer(Trainer):
       chống lại CE khi nhãn là tên riêng / từ ngoại lai.
     - Vị trí tha thứ (context-forgiven) LUÔN tính bằng mask rule cho cả 2 điều kiện.
     - eval_ce được log riêng biệt để làm tiêu chí early stopping / chọn checkpoint công bằng.
+    - Đo độ chính xác byte_acc vs ascii_acc phục vụ cổng kiểm soát G2.
     """
 
     def __init__(self, *args, nesy_weight: float = 0.1, tokenizer=None,
@@ -105,6 +130,16 @@ class NeSyTrainer(Trainer):
         self._invalid_token_ids: set[int] = set()
         self._rule_invalid_ids: set[int] = set()
         self._eval_ce_losses: list[float] = []
+
+        # Phân loại phục vụ đo byte_acc và ascii_acc (cổng G2)
+        self._byte_token_ids = set()
+        self._ascii_token_ids = set()
+        if self.nesy_tokenizer is not None:
+            self._byte_token_ids, self._ascii_token_ids = compute_byte_and_ascii_token_ids(self.nesy_tokenizer)
+        self._eval_byte_correct = 0
+        self._eval_byte_total = 0
+        self._eval_ascii_correct = 0
+        self._eval_ascii_total = 0
 
         self.invalid_mask = None
         if self.nesy_tokenizer is not None and self.nesy_weight > 0 and self.mask_mode != "none":
@@ -202,13 +237,48 @@ class NeSyTrainer(Trainer):
                 outputs = model(**inputs)
                 if outputs.loss is not None:
                     self._eval_ce_losses.append(outputs.loss.detach().mean().item())
+
+        # Đo byte_acc và ascii_acc (cổng G2)
+        if logits is not None and labels is not None and getattr(self, "_byte_token_ids", None):
+            with torch.no_grad():
+                preds = logits.argmax(dim=-1)
+                valid_mask = (labels >= 0) & (labels != -100)
+                labels_flat = labels[valid_mask].view(-1)
+                preds_flat = preds[valid_mask].view(-1)
+                if len(labels_flat) > 0:
+                    labels_list = labels_flat.tolist()
+                    preds_list = preds_flat.tolist()
+                    for y, p in zip(labels_list, preds_list):
+                        if y in self._byte_token_ids:
+                            self._eval_byte_total += 1
+                            if y == p:
+                                self._eval_byte_correct += 1
+                        elif y in self._ascii_token_ids:
+                            self._eval_ascii_total += 1
+                            if y == p:
+                                self._eval_ascii_correct += 1
+
         return loss, logits, labels
 
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
         self._eval_ce_losses = []
+        self._eval_byte_correct = 0
+        self._eval_byte_total = 0
+        self._eval_ascii_correct = 0
+        self._eval_ascii_total = 0
+
         metrics = super().evaluate(eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
+
         if self._eval_ce_losses:
             metrics[f"{metric_key_prefix}_ce"] = sum(self._eval_ce_losses) / len(self._eval_ce_losses)
         else:
             metrics[f"{metric_key_prefix}_ce"] = metrics.get(f"{metric_key_prefix}_loss", 0.0)
+
+        # Ghi byte_acc và ascii_acc (phục vụ ngưỡng báo động C3.2 và cổng G2)
+        byte_acc = (self._eval_byte_correct / self._eval_byte_total) if self._eval_byte_total > 0 else 0.0
+        ascii_acc = (self._eval_ascii_correct / self._eval_ascii_total) if self._eval_ascii_total > 0 else 0.0
+        metrics[f"{metric_key_prefix}_byte_acc"] = round(byte_acc, 4)
+        metrics[f"{metric_key_prefix}_ascii_acc"] = round(ascii_acc, 4)
+        metrics[f"{metric_key_prefix}_acc_gap"] = round(ascii_acc - byte_acc, 4)
+
         return metrics

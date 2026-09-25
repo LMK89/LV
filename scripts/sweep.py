@@ -6,6 +6,8 @@ Hỗ trợ các chế độ:
   --status  : Báo cáo tiến độ hoàn thành các lượt từ thư mục output.
   --dry-run : Chạy kiểm tra nhanh pipeline trên CPU với cấu hình nhỏ gọn.
   --run     : Thực thi toàn bộ (hoặc các lượt còn lại) của sweep trên GPU.
+  --only    : Chỉ chạy duy nhất một run_id cụ thể.
+  --force   : Tiếp tục chạy ngay cả khi git working tree chưa clean.
 """
 import argparse
 import csv
@@ -132,7 +134,41 @@ def check_status(sweep_cfg: dict, runs: list[dict]):
     print(f"Tổng kết: Đã hoàn thành {done_count}/{len(runs)} lượt chạy.\n")
 
 
-def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: str = None):
+def _update_manifest(manifest_path: Path, row_dict: dict):
+    headers = [
+        "run_id", "condition", "seed", "nesy_weight", "mask_mode", "git_commit",
+        "status", "wall_min", "best_step", "best_eval_ce", "val_corpus_cer",
+        "val_fffd_lines", "byte_acc", "ascii_acc", "acc_gap", "delta_oracle"
+    ]
+    file_exists = manifest_path.exists()
+    rows = []
+    updated = False
+
+    if file_exists:
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    if r.get("run_id") == row_dict["run_id"]:
+                        rows.append(row_dict)
+                        updated = True
+                    else:
+                        rows.append(r)
+        except Exception:
+            pass
+
+    if not updated:
+        rows.append(row_dict)
+
+    with open(manifest_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for r in rows:
+            clean_row = {k: r.get(k, "-") for k in headers}
+            writer.writerow(clean_row)
+
+
+def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: str = None, force: bool = False):
     out_root = Path(sweep_cfg.get("output_root", "outputs/step3"))
     out_root.mkdir(parents=True, exist_ok=True)
     manifest_path = out_root / "manifest.csv"
@@ -141,7 +177,12 @@ def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: st
     lora_config = sweep_cfg.get("lora_config", "configs/dora.yaml")
 
     if not dry_run and not _is_git_clean():
-        logger.warning("CẢNH BÁO: Working tree git chưa clean! Để đảm bảo tính tái lập học thuật, nên commit trước khi chạy sweep.")
+        msg = "Git working tree chưa clean! Để đảm bảo tính tái lập học thuật, cần commit trước khi chạy sweep."
+        if not force:
+            logger.error(msg + " Sử dụng --force nếu bạn chắc chắn muốn bỏ qua kiểm tra này.")
+            sys.exit(1)
+        else:
+            logger.warning("CẢNH BÁO (--force được bật): " + msg)
 
     target_runs = [r for r in runs if only is None or r["run_id"] == only]
     logger.info(f"Bắt đầu điều phối sweep ({len(target_runs)} lượt, dry_run={dry_run})...")
@@ -149,6 +190,7 @@ def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: st
     for idx, r in enumerate(target_runs, 1):
         run_id = r["run_id"]
         run_dir = out_root / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
         done_file = run_dir / "DONE"
 
         if done_file.exists():
@@ -156,7 +198,17 @@ def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: st
             continue
 
         logger.info(f"\n{'='*70}\n[{idx}/{len(target_runs)}] BẮT ĐẦU: {run_id}\n{'='*70}")
-        cmd = [
+        start_time = time.time()
+
+        # Kiểm tra checkpoint dở dang để tự động resume
+        resume_ckpt = None
+        checkpoints = sorted(run_dir.glob("checkpoint-*"), key=os.path.getmtime)
+        if checkpoints:
+            resume_ckpt = str(checkpoints[-1])
+            logger.info(f"Tìm thấy checkpoint dở dang: {resume_ckpt}. Tự động resume...")
+
+        # ── PHA 1: Huấn luyện (Train) ──────────────────────────────────
+        train_cmd = [
             sys.executable, "scripts/train.py",
             "--train_config", train_config,
             "--lora_config", lora_config,
@@ -165,19 +217,100 @@ def run_sweep(sweep_cfg: dict, runs: list[dict], dry_run: bool = False, only: st
             "--seed", str(r["seed"]),
             "--output_dir", str(run_dir),
         ]
-        
-        start_time = time.time()
-        ret = subprocess.run(cmd)
-        elapsed = time.time() - start_time
+        if resume_ckpt:
+            train_cmd.extend(["--resume", resume_ckpt])
 
+        ret = subprocess.run(train_cmd)
         if ret.returncode != 0:
-            logger.error(f"Lượt chạy {run_id} THẤT BẠI với mã lỗi {ret.returncode}.")
+            logger.error(f"Lượt {run_id} THẤT BẠI ở pha Train với mã lỗi {ret.returncode}.")
             sys.exit(ret.returncode)
 
-        # Đánh dấu hoàn tất
+        # ── PHA 2: Đánh giá trên tập Val (Evaluate) ────────────────────
+        final_adapter = run_dir / "final_adapter"
+        val_eval_file = run_dir / "eval_val.jsonl"
+        val_split = sweep_cfg.get("eval", {}).get("split_jsonl", "data/splits/val.jsonl")
+        num_beams = sweep_cfg.get("eval", {}).get("num_beams", 3)
+        max_tokens = sweep_cfg.get("eval", {}).get("max_new_tokens", 256)
+
+        val_cer = "-"
+        val_fffd = "-"
+        byte_acc = "-"
+        ascii_acc = "-"
+        acc_gap = "-"
+
+        if final_adapter.exists():
+            eval_cmd = [
+                sys.executable, "scripts/evaluate.py",
+                "--checkpoint", str(final_adapter),
+                "--name", run_id,
+                "--test_jsonl", val_split,
+                "--output_dir", str(val_eval_file),
+                "--num_beams", str(num_beams),
+                "--max_new_tokens", str(max_tokens),
+            ]
+            logger.info(f"Chạy evaluate trên tập Val ({val_split})...")
+            eval_ret = subprocess.run(eval_cmd)
+            if eval_ret.returncode == 0:
+                summary_file = Path(str(val_eval_file).replace(".jsonl", "_summary.json"))
+                if summary_file.exists():
+                    try:
+                        with open(summary_file, "r", encoding="utf-8") as f:
+                            s = json.load(f)
+                            val_cer = s.get("corpus_cer", "-")
+                            val_fffd = s.get("n_replacement_char", "-")
+                    except Exception:
+                        pass
+
+        # ── PHA 3: Phân tích lỗi & CER Oracle (Chỉ bắt buộc cho lam0) ───
+        delta_oracle = "-"
+        if r["nesy_weight"] == 0.0 and val_eval_file.exists():
+            oracle_dir = run_dir / "oracle"
+            oracle_cmd = [
+                sys.executable, "analysis/classify_errors_oracle.py",
+                "--pred_jsonl", str(val_eval_file),
+                "--split_jsonl", val_split,
+                "--out_dir", str(oracle_dir),
+            ]
+            logger.info("Chạy phân loại lỗi và CER Oracle cho checkpoint lam0...")
+            oracle_ret = subprocess.run(oracle_cmd)
+            if oracle_ret.returncode == 0:
+                oracle_summary = oracle_dir / "summary.json"
+                if oracle_summary.exists():
+                    try:
+                        with open(oracle_summary, "r", encoding="utf-8") as f:
+                            os_data = json.load(f)
+                            delta_oracle = os_data.get("delta_oracle", "-")
+                    except Exception:
+                        pass
+
+        elapsed = time.time() - start_time
+        wall_min = round(elapsed / 60.0, 2)
+
+        # Cập nhật manifest
+        row_dict = {
+            "run_id": run_id,
+            "condition": r["condition"],
+            "seed": r["seed"],
+            "nesy_weight": r["nesy_weight"],
+            "mask_mode": r["mask_mode"],
+            "git_commit": _git_commit(),
+            "status": "done",
+            "wall_min": wall_min,
+            "best_step": "-",
+            "best_eval_ce": "-",
+            "val_corpus_cer": val_cer,
+            "val_fffd_lines": val_fffd,
+            "byte_acc": byte_acc,
+            "ascii_acc": ascii_acc,
+            "acc_gap": acc_gap,
+            "delta_oracle": delta_oracle,
+        }
+        _update_manifest(manifest_path, row_dict)
+
+        # Ghi file DONE xác nhận hoàn tất cả 3 pha
         with open(done_file, "w", encoding="utf-8") as f:
             f.write(f"DONE at {time.strftime('%Y-%m-%d %H:%M:%S')} in {elapsed:.1f}s\n")
-        logger.info(f"Lượt chạy {run_id} THÀNH CÔNG trong {elapsed:.1f}s.")
+        logger.info(f"Lượt chạy {run_id} HOÀN TẤT THÀNH CÔNG trong {wall_min} phút.")
 
     logger.info("TOÀN BỘ CÁC LƯỢT TRONG SWEEP ĐÃ HOÀN TẤT THÀNH CÔNG!")
 
@@ -190,6 +323,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Chạy dry-run thử nghiệm nhẹ trên CPU")
     parser.add_argument("--run", action="store_true", help="Chạy các lượt sweep thực tế")
     parser.add_argument("--only", type=str, default=None, help="Chỉ chạy duy nhất 1 run_id cụ thể")
+    parser.add_argument("--force", action="store_true", help="Bỏ qua kiểm tra git clean")
     args = parser.parse_args()
 
     sweep_cfg = load_sweep_config(args.config)
@@ -200,7 +334,7 @@ def main():
     elif args.status:
         check_status(sweep_cfg, runs)
     elif args.dry_run or args.run:
-        run_sweep(sweep_cfg, runs, dry_run=args.dry_run, only=args.only)
+        run_sweep(sweep_cfg, runs, dry_run=args.dry_run, only=args.only, force=args.force)
 
 
 if __name__ == "__main__":
