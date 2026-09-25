@@ -9,6 +9,48 @@ from vocr.nesy.syllables import is_valid_syllable, context_forgiven_rows
 logger = logging.getLogger(__name__)
 
 
+def compute_invalid_token_ids(tokenizer) -> set[int]:
+    """
+    Xác định tập ID các token vi phạm quy tắc âm tiết tiếng Việt:
+    - decode riêng lẻ ra chuỗi không rỗng, không toàn khoảng trắng
+    - KHÔNG chứa U+FFFD (loại trừ các mảnh byte dở dang để tránh triệt tiêu xác suất các byte mở đầu)
+    - không thỏa mãn is_valid_syllable(decoded)
+    """
+    vocab_size = len(tokenizer)
+    invalid_ids = set()
+    for tid in range(vocab_size):
+        try:
+            decoded = tokenizer.decode([tid], skip_special_tokens=True).strip()
+            if decoded and not decoded.isspace() and "\ufffd" not in decoded and not is_valid_syllable(decoded):
+                invalid_ids.add(tid)
+        except Exception:
+            pass
+    return invalid_ids
+
+
+def build_invalid_mask(tokenizer, mask_mode: str = "rule", mask_seed: int = 0) -> tuple[torch.Tensor, set[int]]:
+    """
+    Tạo tensor mask float32 [vocab_size] và set token ID bị phạt.
+    - mask_mode="rule": phạt đúng các token trong compute_invalid_token_ids(tokenizer).
+    - mask_mode="random": chọn ngẫu nhiên đúng số lượng token bị phạt bằng số lượng của mask_mode="rule"
+      để làm nhóm đối chứng (control).
+    """
+    vocab_size = len(tokenizer)
+    rule_invalid_ids = compute_invalid_token_ids(tokenizer)
+    invalid_mask = torch.zeros(vocab_size, dtype=torch.float32)
+
+    if mask_mode == "random":
+        n_invalid = len(rule_invalid_ids)
+        gen = torch.Generator().manual_seed(mask_seed)
+        chosen = torch.randperm(vocab_size, generator=gen)[:n_invalid]
+        invalid_mask[chosen] = 1.0
+        return invalid_mask, set(chosen.tolist())
+    else:
+        for tid in rule_invalid_ids:
+            invalid_mask[tid] = 1.0
+        return invalid_mask, rule_invalid_ids
+
+
 class NeSyTrainer(Trainer):
     """
     Trainer cộng thêm NeSy penalty khả vi vào CE loss:
@@ -50,30 +92,12 @@ class NeSyTrainer(Trainer):
         self.invalid_mask = None
         if self.nesy_tokenizer is not None and self.nesy_weight > 0:
             vocab_size = len(self.nesy_tokenizer)
-            logger.info(f"Precomputing NeSy invalid tokens mask for vocab size {vocab_size}...")
-            invalid_mask_cpu = torch.zeros(vocab_size, dtype=torch.float32)
-            for tid in range(vocab_size):
-                try:
-                    decoded = self.nesy_tokenizer.decode([tid], skip_special_tokens=True).strip()
-                    # Mảnh byte decode ra U+FFFD: không phạt ở cấp token đơn lẻ
-                    # để tránh triệt tiêu xác suất các byte mở đầu tiếng Việt.
-                    if decoded and not decoded.isspace() and "\ufffd" not in decoded and not is_valid_syllable(decoded):
-                        invalid_mask_cpu[tid] = 1.0
-                        self._invalid_token_ids.add(tid)
-                except Exception:
-                    pass
-            if mask_mode == "random":
-                # Control: giữ nguyên SỐ token bị phạt nhưng chọn ngẫu nhiên, để
-                # tách tác dụng tri thức âm tiết khỏi tác dụng điều chuẩn chung.
-                n_invalid = int(invalid_mask_cpu.sum())
-                gen = torch.Generator().manual_seed(mask_seed)
-                chosen = torch.randperm(vocab_size, generator=gen)[:n_invalid]
-                invalid_mask_cpu = torch.zeros(vocab_size, dtype=torch.float32)
-                invalid_mask_cpu[chosen] = 1.0
-                self._invalid_token_ids = set(chosen.tolist())
-            self.invalid_mask = invalid_mask_cpu
-            logger.info(f"NeSy precomputation complete ({mask_mode} mask). "
-                        f"Penalised tokens: {int(invalid_mask_cpu.sum())}/{vocab_size}")
+            logger.info(f"Precomputing NeSy invalid tokens mask for vocab size {vocab_size} ({mask_mode})...")
+            self.invalid_mask, self._invalid_token_ids = build_invalid_mask(
+                self.nesy_tokenizer, mask_mode=self.mask_mode, mask_seed=mask_seed
+            )
+            logger.info(f"NeSy precomputation complete ({self.mask_mode} mask). "
+                        f"Penalised tokens: {len(self._invalid_token_ids)}/{vocab_size}")
 
         logger.info(f"NeSyTrainer initialized | nesy_weight={nesy_weight} | mask_mode={mask_mode}")
 

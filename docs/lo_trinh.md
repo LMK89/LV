@@ -32,17 +32,20 @@ rồi `merge_and_unload()` lúc đánh giá làm đổi embedding đầu vào (P
 trong log train v1). **Cần chạy `scripts/debug_fffd.py model` trên GPU để xác
 nhận trước bước 3**; `configs/dora.yaml` và `loader.py` của LV vẫn mang lỗi này.
 
-## Quy tắc chốt nhánh (điền ngưỡng ở bước 2b, không sửa sau khi có số liệu bước 3)
+## Quy tắc chốt nhánh (chốt chính thức tại bước 2b ngày 25/09/2026, đóng băng trước bước 3)
 
 Ký hiệu: `Δ_oracle` = CER(λ=0) − CER khi sửa đúng toàn bộ lỗi nhóm (a).
+Chỉ số `Δ_oracle` được tính dựa trên phân loại lỗi âm tiết chính ($a_1 + seg\_a_1$) trên tập Val.
+Khoảng tin cậy 95% được tính bằng Clustered Bootstrap theo Document ID (paired bootstrap).
 
 | Điều kiện | Nhánh |
 |---|---|
 | NeSy (rule) tốt hơn λ=0 **và** tốt hơn mask random, p < 0,05 (Holm) | Giữ NeSy trong phần giải pháp |
-| `Δ_oracle` < **___** điểm % CER | Trần thấp → dồn vào phân tích + so chéo tokenizer + mở rộng vocab |
-| `Δ_oracle` ≥ ___ và FSM lấy được ≥ **___** % của `Δ_oracle` | Đóng góp chính = FSM + phân tích, bỏ DPO |
-| `Δ_oracle` ≥ ___ và FSM lấy được < ___ % | Làm DPO trên chuỗi tự sinh (tiêu chí chính CER), bắt buộc đối chứng DPO-chỉ-CER |
+| Cận trên khoảng tin cậy 95% của `Δ_oracle` < **2.0** điểm % CER | Trần thấp → dồn vào phân tích + so chéo tokenizer + mở rộng vocab |
+| `Δ_oracle` ≥ **2.0** điểm % CER và FSM lấy được ≥ **70** % của `Δ_oracle` | Đóng góp chính = FSM + phân tích, bỏ DPO |
+| `Δ_oracle` ≥ **2.0** điểm % CER và FSM lấy được < **70** % | Làm DPO trên chuỗi tự sinh (tiêu chí chính CER), bắt buộc đối chứng DPO-chỉ-CER |
 
-Gợi ý khởi điểm để thảo luận với GVHD: ngưỡng trần 2 điểm %, ngưỡng FSM 70 %.
+Quy tắc đã đạt đồng thuận kỹ thuật giữa Antigravity và Claude Code (Opus 5.5).
 
-Ngày chốt ngưỡng: ______ (commit: ______)
+Ngày chốt ngưỡng: 25/09/2026 (commit: bước 2b)
+
