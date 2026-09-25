@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vocr"
+version = "0.1.0"
+description = "Ràng buộc âm tiết tiếng Việt cho OCR trên Florence-2 (byte-level BPE)"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"vocr.nesy" = ["vietnamese_syllables.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

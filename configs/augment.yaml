@@ -1,0 +1,59 @@
+# ============================================================
+# Augmentation Configuration — Receipt-specific
+# CS2225.K2025_06.2026
+# ============================================================
+# ARCHITECT NOTE:
+#   Augmentations simulate real-world low-quality receipt photos:
+#     - Motion blur & noise → camera shake / low light
+#     - Perspective transform → skewed angles
+#     - Shadow / contrast → uneven lighting
+#   Each augmentation has a probability (p) of being applied.
+# ============================================================
+
+# Input / Output paths
+input_jsonl: "data/splits/train.jsonl"
+output_jsonl: "data/splits/train_augmented.jsonl"
+output_image_dir: "data/augmented"
+
+# Augmentation repetitions (how many augmented copies per original)
+augment_multiplier: 3
+
+# Augmentation pipeline — each entry is {name, p (probability), params}
+pipeline:
+  - name: motion_blur
+    p: 0.5
+    params:
+      blur_limit: [7, 15]
+
+  - name: gaussian_noise
+    p: 0.4
+    params:
+      var_limit: [10.0, 50.0]
+
+  - name: perspective
+    p: 0.4
+    params:
+      scale: [0.05, 0.15]
+
+  - name: random_shadow
+    p: 0.3
+    params:
+      shadow_roi: [0, 0.5, 1, 1]
+      num_shadows_lower: 1
+      num_shadows_upper: 2
+
+  - name: random_brightness_contrast
+    p: 0.5
+    params:
+      brightness_limit: [-0.2, 0.2]
+      contrast_limit: [-0.2, 0.2]
+
+  - name: rotate
+    p: 0.3
+    params:
+      limit: [-10, 10]
+
+  - name: blur
+    p: 0.3
+    params:
+      blur_limit: [3, 7]

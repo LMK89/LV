@@ -1,0 +1,33 @@
+# Bản native của Florence-2 trong transformers (không cần trust_remote_code).
+# Id cũ "microsoft/Florence-2-base" vẫn dùng được — loader.py tự map sang đây.
+base_model_id: "florence-community/Florence-2-base"
+r: 24
+lora_alpha: 48
+lora_dropout: 0.05
+bias: "none"
+# Giữ CAUSAL_LM như cũ để không đổi ngữ nghĩa adapter đã cấu hình. Về bản chất
+# Florence-2 là encoder-decoder (text tower = BART) nên SEQ_2_SEQ_LM mới là giá
+# trị đúng nghĩa; với LoRA thuần cả hai đều chỉ pass-through, đổi thì phải chạy
+# lại toàn bộ đo đạc.
+task_type: "CAUSAL_LM"
+use_rslora: true
+init_lora_weights: "gaussian"
+use_dora: true
+# Tên module theo bản native (loader.py sẽ BÁO LỖI nếu có tên không khớp):
+#   - text tower (BART): q_proj/k_proj/v_proj/out_proj, fc1/fc2
+#   - vision tower (DaViT): qkv, proj, fc1/fc2
+#   - projector đa phương thức: image_projection
+# Danh sách cũ ("o_proj", "linear", "Conv2d") chép từ notebook fine-tune bản
+# remote-code và KHÔNG khớp tên module nào ở bản native — peft sẽ bỏ qua trong
+# im lặng, DoRA gắn thiếu lớp mà không có cảnh báo.
+target_modules:
+  - "q_proj"
+  - "k_proj"
+  - "v_proj"
+  - "out_proj"
+  - "fc1"
+  - "fc2"
+  - "qkv"
+  - "proj"
+  - "image_projection"
+  - "lm_head"

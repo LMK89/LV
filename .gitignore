@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Sinh ra khi chạy — không commit
+data/augmented/
+data/splits/train_augmented.jsonl
+outputs/checkpoints/**/checkpoint-*/
+outputs/**/*.safetensors
+weights/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
