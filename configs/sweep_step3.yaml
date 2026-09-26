@@ -1,0 +1,29 @@
+name: step3_lambda_sweep
+train_config: configs/train.yaml
+lora_config: configs/dora.yaml
+seeds: [1, 2, 3]
+conditions:
+  - id: lam0
+    nesy_weight: 0.0
+    mask_mode: none
+  - id: lam0.1_rule
+    nesy_weight: 0.1
+    mask_mode: rule
+  - id: lam0.1_rand
+    nesy_weight: 0.1
+    mask_mode: random
+  - id: lam0.5_rule
+    nesy_weight: 0.5
+    mask_mode: rule
+  - id: lam0.5_rand
+    nesy_weight: 0.5
+    mask_mode: random
+order: seed_major
+output_root: outputs/step3
+eval:
+  split_jsonl: data/splits/val.jsonl
+  num_beams: 3
+  max_new_tokens: 256
+gates:
+  fffd_line_rate_max: 0.01
+  byte_vs_ascii_acc_gap_max: 0.15

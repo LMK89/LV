@@ -19,3 +19,11 @@ weights/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Scripts kết nối nội bộ
+scripts/claude_bridge.py
+scripts/msg_to_claude.txt
+
+# Step 3 checkpoints & adapters
+outputs/step3/**/checkpoint-*/
+outputs/step3/**/final_adapter/
